@@ -24,6 +24,7 @@ from stable_baselines3.distributions import LatticeStateDependentNoiseDistributi
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
+# lattice related param
 use_lattice = True
 std_clip = (1e-3, 1)
 expln_eps = 1e-6
