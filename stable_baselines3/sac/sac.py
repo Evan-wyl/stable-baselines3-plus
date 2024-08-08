@@ -15,6 +15,8 @@ from stable_baselines3.sac.policies import Actor, CnnPolicy, MlpPolicy, MultiInp
 
 SelfSAC = TypeVar("SelfSAC", bound="SAC")
 
+use_td3_delay_update = False
+
 
 class SAC(OffPolicyAlgorithm):
     """
@@ -267,24 +269,44 @@ class SAC(OffPolicyAlgorithm):
             critic_loss.backward()
             self.critic.optimizer.step()
 
-            # Compute actor loss
-            # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
-            # Min over all critic networks
-            q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
-            min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
-            actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
-            actor_losses.append(actor_loss.item())
+            if not use_td3_delay_update:
+                # Compute actor loss
+                # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
+                # Min over all critic networks
+                q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
+                min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
+                actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+                actor_losses.append(actor_loss.item())
 
-            # Optimize the actor
-            self.actor.optimizer.zero_grad()
-            actor_loss.backward()
-            self.actor.optimizer.step()
+                # Optimize the actor
+                self.actor.optimizer.zero_grad()
+                actor_loss.backward()
+                self.actor.optimizer.step()
 
-            # Update target networks
-            if gradient_step % self.target_update_interval == 0:
-                polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)
-                # Copy running stats, see GH issue #996
-                polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
+                # Update target networks
+                if gradient_step % self.target_update_interval == 0:
+                    polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)
+                    # Copy running stats, see GH issue #996
+                    polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
+            else:
+                # Update target networks
+                if gradient_step % self.target_update_interval == 0:
+                    # Compute actor loss
+                    # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
+                    # Min over all critic networks
+                    q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
+                    min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
+                    actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+                    actor_losses.append(actor_loss.item())
+
+                    # Optimize the actor
+                    self.actor.optimizer.zero_grad()
+                    actor_loss.backward()
+                    self.actor.optimizer.step()
+
+                    polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)
+                    # Copy running stats, see GH issue #996
+                    polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
 
         self._n_updates += gradient_steps
 
