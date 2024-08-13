@@ -291,6 +291,7 @@ class SAC(OffPolicyAlgorithm):
             else:
                 # Update target networks
                 if gradient_step % self.target_update_interval == 0:
+                    print("using TD3 Delay Updating......")
                     # Compute actor loss
                     # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
                     # Min over all critic networks
