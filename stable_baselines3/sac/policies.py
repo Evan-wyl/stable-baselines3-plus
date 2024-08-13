@@ -18,18 +18,9 @@ from stable_baselines3.common.torch_layers import (
 )
 from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 
-from stable_baselines3.distributions import LatticeStateDependentNoiseDistribution, SquashedLatticeNoiseDistribution
-
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
-
-# lattice related param
-use_lattice = False
-std_clip = (1e-3, 1)
-expln_eps = 1e-6
-std_reg = 0
-alpha = 1
 
 
 class Actor(BasePolicy):
@@ -96,26 +87,7 @@ class Actor(BasePolicy):
         self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
 
-        if use_lattice:
-            if self.use_sde:
-                self.action_dist = LatticeStateDependentNoiseDistribution(
-                    action_dim,
-                    full_std=full_std,
-                    use_expln=use_expln,
-                    squash_output=True,
-                    learn_features=True,
-                    epsilon=expln_eps,
-                    std_clip=std_clip,
-                    std_reg=std_reg,
-                    alpha=alpha,
-                )
-                self.mu, self.log_std = self.action_dist.proba_distribution_net(
-                    latent_dim=last_layer_dim, latent_sde_dim=last_layer_dim, log_std_init=log_std_init, clip_mean=clip_mean
-                )
-            else:
-                self.action_dist = SquashedLatticeNoiseDistribution(action_dim)
-                self.mu, self.log_std = self.action_dist.proba_distribution_net(last_layer_dim, log_std_init, state_dependent=True)
-        elif self.use_sde:
+        if self.use_sde:
             self.action_dist = StateDependentNoiseDistribution(
                 action_dim, full_std=full_std, use_expln=use_expln, learn_features=True, squash_output=True
             )
@@ -148,16 +120,6 @@ class Actor(BasePolicy):
             )
         )
 
-        if use_lattice:
-            data.update(
-                dict(
-                    use_lattice=use_lattice,
-                    std_clip=std_clip,
-                    expln_eps=expln_eps,
-                    std_reg=std_reg,
-                    alpha=alpha,
-                )
-            )
         return data
 
     def get_std(self) -> th.Tensor:
@@ -173,8 +135,6 @@ class Actor(BasePolicy):
         msg = "get_std() is only available when using gSDE"
         assert isinstance(self.action_dist, StateDependentNoiseDistribution), msg
         std = self.action_dist.get_std(self.log_std)
-        if use_lattice:
-            std = torch.cat(std, dim=1)
         return std
 
     def reset_noise(self, batch_size: int = 1) -> None:
