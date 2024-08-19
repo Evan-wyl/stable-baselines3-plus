@@ -22,6 +22,8 @@ from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
+use_BN = False
+
 
 class Actor(BasePolicy):
     """
@@ -84,8 +86,12 @@ class Actor(BasePolicy):
 
         action_dim = get_action_dim(self.action_space)
         latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn)
-        self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
+        if not use_BN:
+            self.latent_pi = nn.Sequential(*latent_pi_net)
+        else:
+            print("using Batch Normalization......")
+            self.latent_pi = nn.Sequential(*latent_pi_net, nn.BatchNorm1d(last_layer_dim))
 
         if self.use_sde:
             self.action_dist = StateDependentNoiseDistribution(
