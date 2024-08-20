@@ -22,6 +22,7 @@ from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
+# Batch Normalization
 use_BN = False
 
 
