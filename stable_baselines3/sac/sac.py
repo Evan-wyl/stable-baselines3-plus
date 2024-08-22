@@ -16,6 +16,7 @@ from stable_baselines3.sac.policies import Actor, CnnPolicy, MlpPolicy, MultiInp
 SelfSAC = TypeVar("SelfSAC", bound="SAC")
 
 use_td3_delay_update = False
+use_IB = False
 
 
 class SAC(OffPolicyAlgorithm):
@@ -221,8 +222,14 @@ class SAC(OffPolicyAlgorithm):
                 self.actor.reset_noise()
 
             # Action by the current actor for the sampled state
-            actions_pi, log_prob = self.actor.action_log_prob(replay_data.observations)
+            actions_pi, log_prob, kwargs = self.actor.action_log_prob(replay_data.observations)
             log_prob = log_prob.reshape(-1, 1)
+            kl = 0
+            if use_IB:
+                kl = kwargs['kl']
+                kl = th.mean(kl, dim=1)
+                kl = kl.reshape(-1, 1)
+                self.kl_coef = 1e-3
 
             ent_coef_loss = None
             if self.ent_coef_optimizer is not None and self.log_ent_coef is not None:
@@ -246,7 +253,7 @@ class SAC(OffPolicyAlgorithm):
 
             with th.no_grad():
                 # Select action according to policy
-                next_actions, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
+                next_actions, next_log_prob, kwargs = self.actor.action_log_prob(replay_data.next_observations)
                 # Compute the next Q values: min over all critics targets
                 next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=1)
                 next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
@@ -276,11 +283,15 @@ class SAC(OffPolicyAlgorithm):
                 q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
                 min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
                 actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+                if use_IB:
+                    actor_loss = (ent_coef * log_prob - min_qf_pi + self.kl_coef * kl).mean()
                 actor_losses.append(actor_loss.item())
 
                 # Optimize the actor
                 self.actor.optimizer.zero_grad()
                 actor_loss.backward()
+                if use_IB:
+                    th.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
                 self.actor.optimizer.step()
 
                 # Update target networks
@@ -298,11 +309,15 @@ class SAC(OffPolicyAlgorithm):
                     q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
                     min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
                     actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+                    if use_IB:
+                        actor_loss = (ent_coef * log_prob - min_qf_pi + self.kl_coef * kl).mean()
                     actor_losses.append(actor_loss.item())
 
                     # Optimize the actor
                     self.actor.optimizer.zero_grad()
                     actor_loss.backward()
+                    if use_IB:
+                        th.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
                     self.actor.optimizer.step()
 
                     polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)

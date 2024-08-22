@@ -1,13 +1,23 @@
 from typing import Dict, List, Optional, Tuple, Type, Union
 
 import gymnasium as gym
+import torch
 import torch as th
 from gymnasium import spaces
 from torch import nn
+from torch.nn import functional as F
+from torch import distributions
 
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
 from stable_baselines3.common.type_aliases import TensorDict
 from stable_baselines3.common.utils import get_device
+
+
+def xavier_init(m):
+    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+        print("Initiating bottleneck")
+        nn.init.xavier_uniform(m.weight,gain=nn.init.calculate_gain('relu'))
+        m.bias.data.zero_()
 
 
 class BaseFeaturesExtractor(nn.Module):
@@ -44,6 +54,63 @@ class FlattenExtractor(BaseFeaturesExtractor):
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.flatten(observations)
+
+
+class IBExtractor(BaseFeaturesExtractor):
+    def __init__(
+            self,
+            observation_space: gym.Space,
+            net_arch: Union[List[int], Dict[str, List[int]]],
+            activation_fn: Type[nn.Module],
+            device: Union[th.device, str] = "auto",
+    ) -> None:
+        feature_dim = int(get_flattened_obs_dim(observation_space))
+        super().__init__(observation_space, feature_dim)
+        self.device = get_device(device)
+        extractor_net: List[nn.Module] = []
+        last_layer_dim_pi = feature_dim
+
+        # save dimensions of layers in policy and value nets
+        if isinstance(net_arch, dict):
+            # Note: if key is not specified, assume linear network
+            pi_layers_dims = net_arch.get("pi", [])  # Layer sizes of the policy network
+        else:
+            pi_layers_dims = net_arch
+        # Iterate through the policy layers and build the policy net
+        for curr_layer_dim in pi_layers_dims:
+            extractor_net.append(nn.Linear(last_layer_dim_pi, curr_layer_dim))
+            # extractor_net.append(activation_fn())
+            last_layer_dim_pi = curr_layer_dim
+
+        # Save dim, used to create the distributions
+        self.latent_dim_pi = last_layer_dim_pi
+
+        self.output_size = int(self.latent_dim_pi / 2)
+        self._features_dim = int(last_layer_dim_pi / 2)
+
+        # Create networks
+        # If the list of layers is empty, the network will just act as an Identity module
+        self.extractor = nn.Sequential(*extractor_net).to(self.device)
+
+        self.weight_init()
+
+    def forward(self, features: th.Tensor) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        stats = self.extractor(features)
+
+        mu = stats[:, :self.output_size]
+        std = F.softplus(stats[:, self.output_size:])
+
+        prior = distributions.Normal(torch.zeros(self.output_size).to(self.device),
+                                     torch.ones(self.output_size).to(self.device))
+
+        dist = distributions.Normal(mu, std)
+        kl = distributions.kl.kl_divergence(dist, prior)
+
+        return mu, dist.rsample(), kl
+
+    def weight_init(self):
+        for m in self.extractor.modules():
+            xavier_init(m)
 
 
 class NatureCNN(BaseFeaturesExtractor):
