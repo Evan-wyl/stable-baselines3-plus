@@ -2,7 +2,6 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch as th
-from torch.nn import Softplus
 from gymnasium import spaces
 from torch import nn
 
@@ -19,16 +18,12 @@ from stable_baselines3.common.torch_layers import (
 )
 from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 
-from stable_baselines3.common.torch_layers import IBExtractor
-
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
 # use Batch Normalization
 use_BN = False
-# use Information Bottleneck
-use_IB = False
 
 
 class Actor(BasePolicy):
@@ -159,7 +154,7 @@ class Actor(BasePolicy):
         assert isinstance(self.action_dist, StateDependentNoiseDistribution), msg
         self.action_dist.sample_weights(self.log_std, batch_size=batch_size)
 
-    def get_action_dist_params(self, obs: PyTorchObs) -> Tuple[th.Tensor, th.Tensor, Dict[str, th.Tensor], Dict[str, th.Tensor]]:
+    def get_action_dist_params(self, obs: PyTorchObs) -> Tuple[th.Tensor, th.Tensor, Dict[str, th.Tensor]]:
         """
         Get the parameters for the action distribution.
 
@@ -168,35 +163,26 @@ class Actor(BasePolicy):
             Mean, standard deviation and optional keyword arguments.
         """
         features = self.extract_features(obs, self.features_extractor)
-        kwargs1 = dict()
-        if use_IB:
-            bot_mean, bot, kl = self.extract_features(obs, self.features_extractor)
-            features = bot
-            kwargs1 = dict(bot=bot, kl=kl)
-
         latent_pi = self.latent_pi(features)
         mean_actions = self.mu(latent_pi)
 
         if self.use_sde:
-            kwargs = dict(latent_sde=latent_pi)
-            return mean_actions, self.log_std, kwargs, kwargs1
+            return mean_actions, self.log_std, dict(latent_sde=latent_pi)
         # Unstructured exploration (Original implementation)
         log_std = self.log_std(latent_pi)  # type: ignore[operator]
         # Original Implementation to cap the standard deviation
         log_std = th.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
-
-        return mean_actions, log_std, {}, kwargs1
+        return mean_actions, log_std, {}
 
     def forward(self, obs: PyTorchObs, deterministic: bool = False) -> th.Tensor:
-        mean_actions, log_std, kwargs, kwargs1 = self.get_action_dist_params(obs)
+        mean_actions, log_std, kwargs = self.get_action_dist_params(obs)
         # Note: the action is squashed
         return self.action_dist.actions_from_params(mean_actions, log_std, deterministic=deterministic, **kwargs)
 
-    def action_log_prob(self, obs: PyTorchObs) -> Tuple[th.Tensor, th.Tensor, Dict[str, th.Tensor]]:
-        mean_actions, log_std, kwargs, kwargs1 = self.get_action_dist_params(obs)
-        mean_actions, log_std = self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs)
+    def action_log_prob(self, obs: PyTorchObs) -> Tuple[th.Tensor, th.Tensor]:
+        mean_actions, log_std, kwargs = self.get_action_dist_params(obs)
         # return action and associated log prob
-        return mean_actions, log_std, kwargs1
+        return self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs)
 
     def _predict(self, observation: PyTorchObs, deterministic: bool = False) -> th.Tensor:
         return self(observation, deterministic)
@@ -303,9 +289,6 @@ class SACPolicy(BasePolicy):
 
     def _build(self, lr_schedule: Schedule) -> None:
         self.actor = self.make_actor()
-        if use_IB:
-            feat_extractor = IBExtractor(observation_space=self.observation_space, net_arch=[128,], activation_fn=Softplus)
-            self.actor = self.make_actor(features_extractor=feat_extractor)
         self.actor.optimizer = self.optimizer_class(
             self.actor.parameters(),
             lr=lr_schedule(1),  # type: ignore[call-arg]
@@ -324,11 +307,7 @@ class SACPolicy(BasePolicy):
             critic_parameters = list(self.critic.parameters())
 
         # Critic target should not share the features extractor with critic
-        if use_IB:
-            feat_extractor_target = IBExtractor(observation_space=self.observation_space, net_arch=[128,], activation_fn=Softplus)
-            self.critic_target = self.make_critic(features_extractor=feat_extractor_target)
-        else:
-            self.critic_target = self.make_critic(features_extractor=None)
+        self.critic_target = self.make_critic(features_extractor=None)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
         self.critic.optimizer = self.optimizer_class(
